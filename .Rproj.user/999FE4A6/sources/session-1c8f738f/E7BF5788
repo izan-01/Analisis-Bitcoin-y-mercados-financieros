@@ -3,25 +3,25 @@
     "path": "C:/Users/izand/OneDrive/Analisis-Bitcoin-y-mercados-financieros/btc-mf.R",
     "project_path": "btc-mf.R",
     "type": "r_source",
-    "hash": "0",
+    "hash": "2791774969",
     "contents": "",
     "dirty": false,
     "created": 1764073761392.0,
-    "source_on_save": true,
+    "source_on_save": false,
     "relative_order": 2,
     "properties": {
         "tempName": "Untitled1",
         "source_window_id": "",
         "Source": "Source",
-        "cursorPosition": "100,53",
-        "scrollLine": "72"
+        "cursorPosition": "191,6",
+        "scrollLine": "182"
     },
     "folds": "",
-    "lastKnownWriteTime": 1764073816,
+    "lastKnownWriteTime": 1764670002,
     "encoding": "UTF-8",
     "collab_server": "",
     "source_window": "",
-    "last_content_update": 1764073816412,
+    "last_content_update": 1764670002355,
     "read_only": false,
     "read_only_alternatives": []
 }
