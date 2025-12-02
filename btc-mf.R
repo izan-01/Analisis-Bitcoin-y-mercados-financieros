@@ -207,5 +207,265 @@ ggplot(bitcoin_nasdaq, aes(x = fed_rate, y = btc)) +
        x = "Tasa FED (%)", y = "Precio Bitcoin (USD)") +
   theme_minimal()
 
+##############################################################
+####      PRUEBAS ESTADÍSTICAS INICIALES                  ####
+##############################################################
+
+# 1. Carga de librerías necesarias para los tests
+library(tseries)    # Para kpss.test, jarque.bera.test (opcional)
+library(urca)       # Para ur.df (Dickey-Fuller Aumentado)
+library(lmtest)     # Para bptest (Breusch-Pagan), dwtest (Durbin-Watson)
+library(car)        # Para vif (Multicolinealidad)
+library(nortest)    # Opcional, para más tests de normalidad si fuera necesario
+
+# ------------------------------------------------------------
+# 2. ESTACIONARIEDAD (ADF y KPSS)
+# ------------------------------------------------------------
+# Objetivo: Determinar si las series tienen raíz unitaria (son no estacionarias)
+# o son estacionarias en media/varianza.
+
+# Función auxiliar para reportar resultados rápidamente (estilo pedagógico)
+reportar_estacionariedad <- function(serie, nombre) {
+  cat("\n--- Análisis de:", nombre, "---\n")
+  
+  # Test ADF (H0: Existe raíz unitaria / No estacionaria)
+  # Usamos type="trend" porque los precios suelen tener tendencia
+  adf <- ur.df(serie, type = "trend", selectlags = "AIC")
+  cat("ADF Test (estadístico):", adf@teststat[1], "\n")
+  cat("Valores críticos (1%, 5%, 10%):", adf@cval[1,], "\n")
+  
+  # Test KPSS (H0: La serie es estacionaria)
+  kpss <- kpss.test(serie, null = "Trend")
+  cat("KPSS Test (p-value):", kpss$p.value, "\n")
+  
+  if(kpss$p.value < 0.05) {
+    cat("-> Resultado: Probablemente NO ESTACIONARIA (rechazamos H0 en KPSS)\n")
+  } else {
+    cat("-> Resultado: Posiblemente ESTACIONARIA\n")
+  }
+}
+
+# Aplicamos los tests a las variables principales
+# Nota: Trabajamos con las series originales (niveles)
+reportar_estacionariedad(bitcoin_nasdaq$btc, "Bitcoin (Precio)")
+reportar_estacionariedad(bitcoin_nasdaq$nasdaq, "NASDAQ (Índice)")
+reportar_estacionariedad(bitcoin_nasdaq$fed_rate, "Tasa FED")
+reportar_estacionariedad(bitcoin_nasdaq$btc_vol, "Volatilidad BTC")
+
+# ------------------------------------------------------------
+# 3. ESTIMACIÓN DE MODELO PRELIMINAR (Para diagnóstico de residuos)
+# ------------------------------------------------------------
+# Para probar Normalidad, Homocedasticidad y Autocorrelación, necesitamos
+# un modelo lineal base sobre el cual analizar los residuos.
+# Modelo hipotético: btc ~ nasdaq + fed_rate + btc_vol
+
+modelo_preliminar <- lm(btc ~ nasdaq + fed_rate + btc_vol, data = bitcoin_nasdaq)
+summary(modelo_preliminar)
+
+# Extraemos los residuos para las pruebas
+residuos_pre <- residuals(modelo_preliminar)
+
+# ------------------------------------------------------------
+# 4. NORMALIDAD DE LOS RESIDUOS (Shapiro-Wilk)
+# ------------------------------------------------------------
+# H0: Los residuos siguen una distribución Normal.
+# Si p-value < 0.05, rechazamos normalidad.
+
+shapiro_test <- shapiro.test(residuos_pre)
+print(shapiro_test)
+
+# Gráfico Q-Q para inspección visual (complemento habitual en tus scripts)
+qqnorm(residuos_pre, main = "Q-Q Plot de los Residuos")
+qqline(residuos_pre, col = "red", lwd = 2)
+
+# ------------------------------------------------------------
+# 5. HOMOCEDASTICIDAD (Breusch-Pagan)
+# ------------------------------------------------------------
+# H0: La varianza de los errores es constante (Homocedasticidad).
+# H1: La varianza depende de las variables explicativas (Heterocedasticidad).
+# Si p-value < 0.05, existe heterocedasticidad.
+
+bp_test <- bptest(modelo_preliminar)
+print(bp_test)
+
+# ------------------------------------------------------------
+# 6. AUTOCORRELACIÓN (Durbin-Watson)
+# ------------------------------------------------------------
+# H0: No hay autocorrelación de primer orden en los residuos.
+# Estadístico DW cercano a 2 indica ausencia de autocorrelación.
+# DW < 1.5 o > 2.5 sugiere problemas.
+
+dw_test <- dwtest(modelo_preliminar)
+print(dw_test)
+
+# ------------------------------------------------------------
+# 7. MULTICOLINEALIDAD (VIF)
+# ------------------------------------------------------------
+# Factor de Inflación de la Varianza.
+# Regla general: VIF > 5 o 10 indica multicolinealidad problemática.
+# Esto ocurre si NASDAQ, Tasa FED y Volatilidad están muy correlacionadas entre sí.
+
+vif_valores <- vif(modelo_preliminar)
+print(vif_valores)
+
+# Visualización rápida de VIF (barplot)
+barplot(vif_valores, main = "VIF Values", horiz = TRUE, col = "steelblue", xlim = c(0, max(vif_valores)+2))
+abline(v = 5, col = "red", lty = 2) # Línea de umbral de alerta
+
+# ------------------------------------------------------------
+# GRÁFICO Q-Q MEJORADO (ggplot2)
+# ------------------------------------------------------------
+# Objetivo: Evaluar visualmente si los puntos siguen la línea diagonal teórica.
+
+# 1. Crear un dataframe con los residuos para poder usar ggplot
+df_residuos <- data.frame(Residuos_Estandarizados = rstandard(modelo_preliminar))
+
+# 2. Generar el gráfico
+ggplot(df_residuos, aes(sample = Residuos_Estandarizados)) +
+  stat_qq(color = "steelblue", alpha = 0.6, size = 2) +     # Puntos azules semitransparentes
+  stat_qq_line(color = "red", lwd = 1, linetype = "solid") + # Línea de referencia roja sólida
+  labs(title = "Gráfico Q-Q de Normalidad de los Residuos",
+       subtitle = "Interpretación: Si los puntos se alejan de la línea roja, sospechamos NO normalidad",
+       x = "Cuantiles Teóricos (Distribución Normal)",
+       y = "Cuantiles Observados (Residuos Estandarizados)") +
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold", size = 14),
+        plot.subtitle = element_text(size = 10, color = "gray40"))
+
+# ------------------------------------------------------------
+# GRÁFICO VIF MEJORADO (ggplot2)
+# ------------------------------------------------------------
+# Objetivo: Visualizar qué variables superan el umbral de multicolinealidad.
+
+# 1. Preparar los datos: Convertir el vector de VIF a un dataframe y ordenar
+vif_df <- data.frame(
+  Variable = names(vif_valores),
+  VIF = as.numeric(vif_valores)
+) %>%
+  arrange(desc(VIF)) # Ordenar de mayor a menor VIF
+
+# 2. Generar el gráfico de barras
+ggplot(vif_df, aes(x = reorder(Variable, VIF), y = VIF)) +    # reorder() ordena el eje Y según el valor VIF
+  geom_col(fill = "steelblue", width = 0.7) +                 # Barras azules
+  geom_text(aes(label = round(VIF, 2)), hjust = -0.2, size = 4, color = "black") + # Añadir el valor numérico al lado de la barra
+  coord_flip() + # Girar el gráfico para que sea horizontal
+  scale_y_continuous(limits = c(0, max(vif_df$VIF) * 1.15)) + # Dar un poco de espacio extra a la derecha para los números
+  labs(title = "Factor de Inflación de la Varianza (VIF)",
+       subtitle = "Valores > 5 indican posible multicolinealidad severa",
+       x = "", # Quitamos la etiqueta del eje X (ya son los nombres de variables)
+       y = "Valor VIF") +
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold", size = 14),
+        axis.text.y = element_text(size = 11, face = "bold", color = "black")) # Nombres de variables más grandes y oscuros
 
 
+##############################################################
+####      MODELIZACIÓN ECONOMÉTRICA Y COINTEGRACIÓN       ####
+##############################################################
+
+library(urca)       # Para test de raíz unitaria en residuos (Engle-Granger)
+library(nlme)       # Para MCG (GLS) con estructura AR(1)
+library(forecast)   # Para ARIMA y auto.arima
+library(lmtest)     # Para coeftest
+
+# ------------------------------------------------------------
+# 1. TEST DE COINTEGRACIÓN (Engle-Granger)
+# ------------------------------------------------------------
+# Paso 1: Regresión en niveles (Largo Plazo)
+# btc = beta0 + beta1*nasdaq + beta2*fed_rate + u_t
+modelo_largo_plazo <- lm(btc ~ nasdaq + fed_rate, data = bitcoin_nasdaq)
+summary(modelo_largo_plazo)
+
+# Paso 2: Obtener los residuos
+residuos_lp <- residuals(modelo_largo_plazo)
+
+# Paso 3: Test ADF a los residuos (H0: No estacionario / No cointegración)
+# Importante: Si los residuos son estacionarios (rechazamos H0), existe cointegración.
+test_coint <- ur.df(residuos_lp, type = "none", selectlags = "AIC")
+summary(test_coint)
+
+# INTERPRETACIÓN:
+# Mira el valor de "test-statistic" frente a los "critical values".
+# - Si estadístico < valor crítico (ej. -3.5 < -2.6): RECHAZAMOS H0 -> HAY COINTEGRACIÓN.
+# - Si estadístico > valor crítico: NO RECHAZAMOS H0 -> NO HAY COINTEGRACIÓN (Regresión espuria).
+
+# ------------------------------------------------------------
+# 2. CAMINO A: MODELO DE CORRECCIÓN DE ERROR (ECM)
+# (Ejecutar SOLO si encontraste COINTEGRACIÓN en el paso anterior)
+# ------------------------------------------------------------
+
+# Crear diferencias (Deltas) y rezago del residuo
+n <- nrow(bitcoin_nasdaq)
+dBTC <- diff(bitcoin_nasdaq$btc)
+dNASDAQ <- diff(bitcoin_nasdaq$nasdaq)
+dFED <- diff(bitcoin_nasdaq$fed_rate)
+u_lag <- residuos_lp[1:(n-1)] # Residuo retardado un periodo (t-1)
+
+# Ajustar longitudes (al diferenciar perdemos 1 obs)
+df_ecm <- data.frame(dBTC, dNASDAQ, dFED, u_lag)
+
+# Estimación del ECM
+# dBTC = alpha + beta1*dNASDAQ + beta2*dFED + lambda*u_lag + error
+modelo_ecm <- lm(dBTC ~ dNASDAQ + dFED + u_lag, data = df_ecm)
+summary(modelo_ecm)
+
+# Interpretación:
+# - El coeficiente de 'u_lag' (lambda) debe ser negativo y significativo.
+# - Indica la velocidad de ajuste hacia el equilibrio de largo plazo.
+
+# ------------------------------------------------------------
+# 3. CAMINO B: CORRECCIÓN POR AUTOCORRELACIÓN (MCG / GLS)
+# (Ejecutar si NO hay cointegración o si los residuos tienen autocorrelación)
+# ------------------------------------------------------------
+# Usamos 'gls' del paquete nlme como en la fuente
+
+# Creamos índice temporal entero necesario para gls
+bitcoin_nasdaq$tiempo <- 1:nrow(bitcoin_nasdaq)
+
+# Modelo GLS con estructura AR(1) para corregir autocorrelación
+modelo_gls <- gls(btc ~ nasdaq + fed_rate, 
+                  data = bitcoin_nasdaq,
+                  correlation = corAR1(form = ~ tiempo),
+                  method = "ML")
+
+summary(modelo_gls)
+
+# Comparación con MCO tradicional
+AIC(modelo_largo_plazo, modelo_gls)
+# Si AIC del GLS es menor, el ajuste AR(1) ha mejorado el modelo.
+
+# ------------------------------------------------------------
+# 4. MODELOS ARIMA / ARIMAX (Predicción)
+# ------------------------------------------------------------
+# ARIMAX: ARIMA de Bitcoin con variables exógenas (NASDAQ y FED)
+
+# Convertir a objetos ts (series temporales) si no lo están
+ts_btc <- ts(bitcoin_nasdaq$btc, frequency = 12)
+ts_nasdaq <- ts(bitcoin_nasdaq$nasdaq, frequency = 12)
+ts_fed <- ts(bitcoin_nasdaq$fed_rate, frequency = 12)
+
+# Matriz de regresores exógenos
+xreg_actual <- cbind(nasdaq = ts_nasdaq, fed = ts_fed)
+
+# Auto ARIMA (selecciona automáticamente p,d,q)
+modelo_arimax <- auto.arima(ts_btc, xreg = xreg_actual)
+summary(modelo_arimax)
+
+# Diagnóstico de residuos del ARIMAX
+checkresiduals(modelo_arimax)
+
+# --- PRONÓSTICO (Forecasting) ---
+# Para pronosticar BTC a futuro, necesitamos valores futuros de NASDAQ y FED.
+# Como ejemplo didáctico, usamos los últimos 12 valores observados como "futuro"
+# (En un caso real, deberías proyectar NASDAQ y FED primero o usar escenarios).
+
+xreg_futuro <- tail(xreg_actual, 12) 
+
+# Pronóstico a 12 meses
+pronostico <- forecast(modelo_arimax, xreg = xreg_futuro, h = 12)
+
+# Gráfico del pronóstico
+autoplot(pronostico) +
+  labs(title = "Pronóstico Bitcoin (ARIMAX)", 
+       y = "Precio USD", x = "Tiempo") +
+  theme_minimal()
