@@ -359,113 +359,257 @@ ggplot(vif_df, aes(x = reorder(Variable, VIF), y = VIF)) +    # reorder() ordena
         axis.text.y = element_text(size = 11, face = "bold", color = "black")) # Nombres de variables más grandes y oscuros
 
 
-##############################################################
-####      MODELIZACIÓN ECONOMÉTRICA Y COINTEGRACIÓN       ####
-##############################################################
+############################################################
+####  BLOQUE: MODELOS ARIMA/ARIMAX Y COINTEGRACIÓN      ####
+############################################################
 
-library(urca)       # Para test de raíz unitaria en residuos (Engle-Granger)
-library(nlme)       # Para MCG (GLS) con estructura AR(1)
-library(forecast)   # Para ARIMA y auto.arima
-library(lmtest)     # Para coeftest
+# Librerías necesarias (basadas en Script Granger...)
+library(forecast)
+library(tseries)
+library(urca)
+library(ggplot2)
+library(lmtest)
+library(nlme)      # Para GLS
+library(sandwich)  # Para errores robustos
 
-# ------------------------------------------------------------
-# 1. TEST DE COINTEGRACIÓN (Engle-Granger)
-# ------------------------------------------------------------
-# Paso 1: Regresión en niveles (Largo Plazo)
-# btc = beta0 + beta1*nasdaq + beta2*fed_rate + u_t
-modelo_largo_plazo <- lm(btc ~ nasdaq + fed_rate, data = bitcoin_nasdaq)
-summary(modelo_largo_plazo)
+# ----------------------------------------------------------
+# 1. PREPARACIÓN DE SERIES TEMPORALES (Objetos ts)
+# ----------------------------------------------------------
+# Aseguramos frecuencia mensual (12) y fecha de inicio correcta
+ts_btc    <- ts(bitcoin_nasdaq$btc,    start = c(2015, 1), frequency = 12)
+ts_nasdaq <- ts(bitcoin_nasdaq$nasdaq, start = c(2015, 1), frequency = 12)
+ts_fed    <- ts(bitcoin_nasdaq$fed_rate, start = c(2015, 1), frequency = 12)
 
-# Paso 2: Obtener los residuos
-residuos_lp <- residuals(modelo_largo_plazo)
+# ----------------------------------------------------------
+# 2. MODELOS ARIMA y ARIMAX (Pronóstico)
+# ----------------------------------------------------------
+# Objetivo: Modelar la serie y predecir.
 
-# Paso 3: Test ADF a los residuos (H0: No estacionario / No cointegración)
-# Importante: Si los residuos son estacionarios (rechazamos H0), existe cointegración.
-test_coint <- ur.df(residuos_lp, type = "none", selectlags = "AIC")
-summary(test_coint)
+# --- A) Modelo ARIMA Univariante (Solo Bitcoin) ---
+# stepwise=FALSE y approximation=FALSE mejoran la precisión (según tu script)
+modelo_arima <- auto.arima(ts_btc, stepwise = FALSE, approximation = FALSE)
+cat("\n--- Resumen ARIMA Base ---\n")
+summary(modelo_arima)
 
-# INTERPRETACIÓN:
-# Mira el valor de "test-statistic" frente a los "critical values".
-# - Si estadístico < valor crítico (ej. -3.5 < -2.6): RECHAZAMOS H0 -> HAY COINTEGRACIÓN.
-# - Si estadístico > valor crítico: NO RECHAZAMOS H0 -> NO HAY COINTEGRACIÓN (Regresión espuria).
+# --- B) Modelo ARIMAX (Con NASDAQ y FED como exógenas) ---
+xreg_actual <- cbind(NASDAQ = ts_nasdaq, FED = ts_fed)
 
-# ------------------------------------------------------------
-# 2. CAMINO A: MODELO DE CORRECCIÓN DE ERROR (ECM)
-# (Ejecutar SOLO si encontraste COINTEGRACIÓN en el paso anterior)
-# ------------------------------------------------------------
-
-# Crear diferencias (Deltas) y rezago del residuo
-n <- nrow(bitcoin_nasdaq)
-dBTC <- diff(bitcoin_nasdaq$btc)
-dNASDAQ <- diff(bitcoin_nasdaq$nasdaq)
-dFED <- diff(bitcoin_nasdaq$fed_rate)
-u_lag <- residuos_lp[1:(n-1)] # Residuo retardado un periodo (t-1)
-
-# Ajustar longitudes (al diferenciar perdemos 1 obs)
-df_ecm <- data.frame(dBTC, dNASDAQ, dFED, u_lag)
-
-# Estimación del ECM
-# dBTC = alpha + beta1*dNASDAQ + beta2*dFED + lambda*u_lag + error
-modelo_ecm <- lm(dBTC ~ dNASDAQ + dFED + u_lag, data = df_ecm)
-summary(modelo_ecm)
-
-# Interpretación:
-# - El coeficiente de 'u_lag' (lambda) debe ser negativo y significativo.
-# - Indica la velocidad de ajuste hacia el equilibrio de largo plazo.
-
-# ------------------------------------------------------------
-# 3. CAMINO B: CORRECCIÓN POR AUTOCORRELACIÓN (MCG / GLS)
-# (Ejecutar si NO hay cointegración o si los residuos tienen autocorrelación)
-# ------------------------------------------------------------
-# Usamos 'gls' del paquete nlme como en la fuente
-
-# Creamos índice temporal entero necesario para gls
-bitcoin_nasdaq$tiempo <- 1:nrow(bitcoin_nasdaq)
-
-# Modelo GLS con estructura AR(1) para corregir autocorrelación
-modelo_gls <- gls(btc ~ nasdaq + fed_rate, 
-                  data = bitcoin_nasdaq,
-                  correlation = corAR1(form = ~ tiempo),
-                  method = "ML")
-
-summary(modelo_gls)
-
-# Comparación con MCO tradicional
-AIC(modelo_largo_plazo, modelo_gls)
-# Si AIC del GLS es menor, el ajuste AR(1) ha mejorado el modelo.
-
-# ------------------------------------------------------------
-# 4. MODELOS ARIMA / ARIMAX (Predicción)
-# ------------------------------------------------------------
-# ARIMAX: ARIMA de Bitcoin con variables exógenas (NASDAQ y FED)
-
-# Convertir a objetos ts (series temporales) si no lo están
-ts_btc <- ts(bitcoin_nasdaq$btc, frequency = 12)
-ts_nasdaq <- ts(bitcoin_nasdaq$nasdaq, frequency = 12)
-ts_fed <- ts(bitcoin_nasdaq$fed_rate, frequency = 12)
-
-# Matriz de regresores exógenos
-xreg_actual <- cbind(nasdaq = ts_nasdaq, fed = ts_fed)
-
-# Auto ARIMA (selecciona automáticamente p,d,q)
-modelo_arimax <- auto.arima(ts_btc, xreg = xreg_actual)
+modelo_arimax <- auto.arima(ts_btc, xreg = xreg_actual, 
+                            stepwise = FALSE, approximation = FALSE)
+cat("\n--- Resumen ARIMAX ---\n")
 summary(modelo_arimax)
 
-# Diagnóstico de residuos del ARIMAX
+# Comparación de modelos (AIC)
+cat("AIC ARIMA:", AIC(modelo_arima), "\n")
+cat("AIC ARIMAX:", AIC(modelo_arimax), "\n")
+# Si AIC ARIMAX < AIC ARIMA -> Las variables externas mejoran el modelo.
+
+# --- C) Diagnóstico de Residuos ---
 checkresiduals(modelo_arimax)
 
-# --- PRONÓSTICO (Forecasting) ---
-# Para pronosticar BTC a futuro, necesitamos valores futuros de NASDAQ y FED.
-# Como ejemplo didáctico, usamos los últimos 12 valores observados como "futuro"
-# (En un caso real, deberías proyectar NASDAQ y FED primero o usar escenarios).
+# --- D) Pronóstico Dinámico (12 meses) ---
+# Para evitar la línea plana, proyectamos primero las exógenas (NASDAQ y FED)
+horizonte <- 12
+fit_nasdaq_fut <- auto.arima(ts_nasdaq)
+fit_fed_fut    <- auto.arima(ts_fed)
 
-xreg_futuro <- tail(xreg_actual, 12) 
+# Proyección de regresores futuros
+futuro_nasdaq <- forecast(fit_nasdaq_fut, h = horizonte)$mean
+futuro_fed    <- forecast(fit_fed_fut, h = horizonte)$mean
+xreg_futuro   <- cbind(NASDAQ = futuro_nasdaq, FED = futuro_fed)
 
-# Pronóstico a 12 meses
-pronostico <- forecast(modelo_arimax, xreg = xreg_futuro, h = 12)
+# Pronóstico final del Bitcoin
+forecast_arimax <- forecast(modelo_arimax, xreg = xreg_futuro, h = horizonte)
 
-# Gráfico del pronóstico
-autoplot(pronostico) +
-  labs(title = "Pronóstico Bitcoin (ARIMAX)", 
-       y = "Precio USD", x = "Tiempo") +
+# Visualización
+autoplot(forecast_arimax) +
+  labs(title = "Pronóstico Bitcoin (ARIMAX 12 meses)",
+       subtitle = "Con proyecciones dinámicas de NASDAQ y FED",
+       y = "Precio USD", x = "Año") +
   theme_minimal()
+
+
+# ----------------------------------------------------------
+# 3. TEST DE COINTEGRACIÓN (Engle-Granger)
+# ----------------------------------------------------------
+# "Si las variables son no estacionarias, prueba de cointegración"
+
+# Paso 1: Regresión de Largo Plazo (Niveles)
+coint_reg <- lm(ts_btc ~ ts_nasdaq + ts_fed)
+summary(coint_reg)
+
+# Paso 2: Extraer residuos
+resid_coint <- residuals(coint_reg)
+
+# Visualización de residuos (¿Parecen estacionarios?)
+# Ajustamos los márgenes: c(abajo, izquierda, arriba, derecha)
+# Aumentamos un poco la izquierda (5) y abajo (5) para que quepan las etiquetas
+par(mar = c(5, 5, 4, 2))
+
+plot(resid_coint, 
+     type = "l", 
+     col = "purple", 
+     lwd = 2, 
+     main = "Residuos de la relación de largo plazo",
+     xlab = "Tiempo (en meses)",       # Etiqueta eje X
+     ylab = "Residuos",     # Etiqueta eje Y
+     las = 1,               # Pone los números del eje Y en horizontal (más legible)
+     cex.lab = 1.2,         # Aumenta un poco el tamaño de las etiquetas de los ejes
+     cex.axis = 1)          # Tamaño de los números
+
+# Línea de referencia
+abline(h = 0, col = "gray", lwd = 2, lty = 2)
+
+# Cuadrícula
+grid()
+
+# Restauramos márgenes por defecto (buena práctica)
+par(mar = c(5, 4, 4, 2) + 0.1)
+
+# Paso 3: Test ADF a los residuos
+# type="none" porque los residuos tienen media cero teórica.
+adf_resid <- ur.df(resid_coint, type="none", selectlags="AIC")
+summary(adf_resid)
+
+# === GUÍA DE DECISIÓN ===
+# MIRA EL VALOR "t-statistic" DEL TEST ADF ANTERIOR:
+# - Si t-stat < Valor Crítico: RECHAZAS H0 -> HAY COINTEGRACIÓN.
+#   -> Ejecuta el apartado 4.A (ECM).
+# - Si t-stat > Valor Crítico: NO RECHAZAS H0 -> NO HAY COINTEGRACIÓN.
+#   -> Ejecuta el apartado 4.B (GLS/MCG).
+
+
+# ----------------------------------------------------------
+# ----------------------------------------------------------
+# 4.A CASO AFIRMATIVO: MODELO DE CORRECCIÓN DE ERROR (ECM)
+# ----------------------------------------------------------
+
+# 1. Definir N para recortar vectores correctamente
+n <- length(resid_coint)
+
+# 2. Construir las variables
+# dy, dx1, dx2 pierden la primera observación (tienen longitud n-1)
+dy  <- diff(ts_btc)
+dx1 <- diff(ts_nasdaq)
+dx2 <- diff(ts_fed)
+
+# u_lag: Queremos el residuo de t-1. 
+# Para alinear con las diferencias (que empiezan en t=2), 
+# cogemos los residuos desde el 1 hasta el penúltimo (n-1).
+u_lag <- resid_coint[1:(n-1)]
+
+# 3. Crear el dataframe (Ahora sí tendrán la misma longitud)
+ecm_df <- data.frame(dy = as.numeric(dy), 
+                     dx1 = as.numeric(dx1), 
+                     dx2 = as.numeric(dx2), 
+                     u_lag = as.numeric(u_lag))
+
+# 4. Estimación del ECM
+ecm_fit <- lm(dy ~ dx1 + dx2 + u_lag, data = ecm_df)
+summary(ecm_fit)
+
+
+
+###############################################################
+####    BLOQUE: ENDOGENEIDAD Y VARIABLES INSTRUMENTALES    ####
+###############################################################
+
+# 1. CARGA DE LIBRERÍAS (Basado en Script Brent-EURUSD)
+library(AER)        # Para la función ivreg (MC2E)
+library(lmtest)     # Para tests de diagnóstico
+library(sandwich)   # Para errores robustos
+library(stargazer)  # Para tablas comparativas
+library(dplyr)      # Para crear retardos (lag)
+
+# 2. PREPARACIÓN DE DATOS E INSTRUMENTOS
+# -------------------------------------------------------------
+# Creamos un rezago de la Tasa FED como instrumento adicional
+# Esto nos permite tener 2 instrumentos (FED actual y FED pasada) para probar sobreidentificación.
+datos_iv <- bitcoin_nasdaq %>%
+  mutate(fed_rate_L1 = dplyr::lag(fed_rate, 1)) %>%
+  na.omit() # Eliminamos el NA generado por el lag
+
+# 3. MODELO BASE (MCO / OLS)
+# -------------------------------------------------------------
+# Modelo ingenuo: Asume que NASDAQ es exógeno.
+# btc = beta0 + beta1 * nasdaq + error
+modelo_mco <- lm(btc ~ nasdaq, data = datos_iv)
+
+cat("\n--- Resumen Modelo MCO (Sin corregir endogeneidad) ---\n")
+summary(modelo_mco)
+
+
+# 4. ESTIMACIÓN POR VARIABLES INSTRUMENTALES (MC2E / 2SLS)
+# -------------------------------------------------------------
+# Ecuación: btc ~ nasdaq
+# Instrumentos: fed_rate + fed_rate_L1
+# Sintaxis ivreg: dependiente ~ endógena | instrumentos
+modelo_iv <- ivreg(btc ~ nasdaq | fed_rate + fed_rate_L1, data = datos_iv)
+
+cat("\n--- Resumen Modelo MC2E (Con Instrumentos: Tasa FED) ---\n")
+# El argumento diagnostics = TRUE nos da los tests de Hausman, Sargan y Weak Instruments automáticamente
+summary(modelo_iv, diagnostics = TRUE)
+
+
+# 5. DIAGNÓSTICO E INTERPRETACIÓN DE TESTS
+# -------------------------------------------------------------
+# Extraemos los tests diagnósticos para analizar uno a uno (estilo fuente Brent)
+
+diagnosticos <- summary(modelo_iv, diagnostics = TRUE)$diagnostics
+
+cat("\n--- ANÁLISIS DE DIAGNÓSTICOS ---\n")
+
+# A) TEST DE INSTRUMENTOS DÉBILES (Weak Instruments)
+# H0: Los instrumentos son débiles (no correlacionan con la endógena).
+# Regla práctica: Si el estadístico F > 10, los instrumentos son fuertes.
+f_stat_weak <- diagnosticos["Weak instruments", "statistic"]
+cat("1. Test de Instrumentos Débiles (F-statistic):", round(f_stat_weak, 2), "\n")
+if(f_stat_weak > 10) {
+  cat("   -> Conclusión: Instrumentos FUERTES (F > 10). La Tasa FED explica bien al NASDAQ.\n")
+} else {
+  cat("   -> Conclusión: Instrumentos DÉBILES (Cuidado con la inferencia).\n")
+}
+
+# B) TEST DE ENDOGENEIDAD (Wu-Hausman)
+# H0: La variable explicativa (NASDAQ) es exógena (MCO es consistente).
+# H1: La variable es endógena (MCO es sesgado, MC2E es necesario).
+p_hausman <- diagnosticos["Wu-Hausman", "p-value"]
+cat("2. Test de Endogeneidad (Wu-Hausman) p-value:", round(p_hausman, 4), "\n")
+if(p_hausman < 0.05) {
+  cat("   -> Conclusión: Se RECHAZA exogeneidad. Hay endogeneidad. Usar MC2E es CORRECTO.\n")
+} else {
+  cat("   -> Conclusión: No se rechaza exogeneidad. MCO sería suficiente.\n")
+}
+
+# C) TEST DE SOBREIDENTIFICACIÓN (Sargan)
+# Solo funciona si tenemos más instrumentos (2) que variables endógenas (1).
+# H0: Los instrumentos son válidos (no correlacionados con el error estructural).
+p_sargan <- diagnosticos["Sargan", "p-value"]
+cat("3. Test de Validez (Sargan) p-value:", round(p_sargan, 4), "\n")
+if(p_sargan > 0.05) {
+  cat("   -> Conclusión: No se rechaza H0. Los instrumentos son VÁLIDOS (Exógenos).\n")
+} else {
+  cat("   -> Conclusión: Se rechaza H0. Los instrumentos podrían ser inválidos (correlacionados con el error).\n")
+}
+
+
+# 6. COMPARACIÓN MCO vs MC2E (Tabla Resumen)
+# -------------------------------------------------------------
+stargazer(modelo_mco, modelo_iv, type = "text",
+          title = "Comparación: MCO vs MC2E (Corrección de Endogeneidad)",
+          column.labels = c("MCO (Ingenuo)", "MC2E (IV: FED Rate)"),
+          model.names = FALSE)
+
+
+# 7. DIAGNÓSTICO VISUAL (Residuos MC2E)
+# -------------------------------------------------------------
+# Verificar si los residuos del modelo corregido se comportan bien
+residuos_iv <- residuals(modelo_iv)
+
+par(mar = c(5, 5, 4, 2)) # Ajuste de márgenes para que se vea bien
+plot(residuos_iv, type = "l", col = "darkblue", lwd = 1.5,
+     main = "Residuos del Modelo MC2E",
+     ylab = "Error Estimado", xlab = "Índice Temporal",
+     las = 1)
+abline(h = 0, col = "red", lty = 2, lwd = 2)
+grid()
