@@ -276,7 +276,22 @@ print(shapiro_test)
 
 # Gráfico Q-Q para inspección visual (complemento habitual en tus scripts)
 qqnorm(residuos_pre, main = "Q-Q Plot de los Residuos")
-qqline(residuos_pre, col = "red", lwd = 2)
+
+df_residuos <- data.frame(Residuos_Estandarizados = rstandard(modelo_preliminar))
+
+#Generar el gráfico
+ggplot(df_residuos, aes(sample = Residuos_Estandarizados)) +
+  stat_qq(color = "steelblue", alpha = 0.6, size = 2) +     # Puntos azules semitransparentes
+  stat_qq_line(color = "red", lwd = 1, linetype = "solid") + # Línea de referencia roja sólida
+  labs(title = "Gráfico Q-Q de Normalidad de los Residuos",
+       subtitle = "Interpretación: Si los puntos se alejan de la línea roja, sospechamos NO normalidad",
+       x = "Cuantiles Teóricos (Distribución Normal)",
+       y = "Cuantiles Observados (Residuos Estandarizados)") +
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold", size = 14),
+        plot.subtitle = element_text(size = 10, color = "gray40"))
+
+
 
 # ------------------------------------------------------------
 # 5. HOMOCEDASTICIDAD (Breusch-Pagan)
@@ -308,43 +323,14 @@ print(dw_test)
 vif_valores <- vif(modelo_preliminar)
 print(vif_valores)
 
-# Visualización rápida de VIF (barplot)
-barplot(vif_valores, main = "VIF Values", horiz = TRUE, col = "steelblue", xlim = c(0, max(vif_valores)+2))
-abline(v = 5, col = "red", lty = 2) # Línea de umbral de alerta
+# gráfico
 
-# ------------------------------------------------------------
-# GRÁFICO Q-Q MEJORADO (ggplot2)
-# ------------------------------------------------------------
-# Objetivo: Evaluar visualmente si los puntos siguen la línea diagonal teórica.
-
-# 1. Crear un dataframe con los residuos para poder usar ggplot
-df_residuos <- data.frame(Residuos_Estandarizados = rstandard(modelo_preliminar))
-
-# 2. Generar el gráfico
-ggplot(df_residuos, aes(sample = Residuos_Estandarizados)) +
-  stat_qq(color = "steelblue", alpha = 0.6, size = 2) +     # Puntos azules semitransparentes
-  stat_qq_line(color = "red", lwd = 1, linetype = "solid") + # Línea de referencia roja sólida
-  labs(title = "Gráfico Q-Q de Normalidad de los Residuos",
-       subtitle = "Interpretación: Si los puntos se alejan de la línea roja, sospechamos NO normalidad",
-       x = "Cuantiles Teóricos (Distribución Normal)",
-       y = "Cuantiles Observados (Residuos Estandarizados)") +
-  theme_minimal() +
-  theme(plot.title = element_text(face = "bold", size = 14),
-        plot.subtitle = element_text(size = 10, color = "gray40"))
-
-# ------------------------------------------------------------
-# GRÁFICO VIF MEJORADO (ggplot2)
-# ------------------------------------------------------------
-# Objetivo: Visualizar qué variables superan el umbral de multicolinealidad.
-
-# 1. Preparar los datos: Convertir el vector de VIF a un dataframe y ordenar
 vif_df <- data.frame(
   Variable = names(vif_valores),
   VIF = as.numeric(vif_valores)
 ) %>%
   arrange(desc(VIF)) # Ordenar de mayor a menor VIF
 
-# 2. Generar el gráfico de barras
 ggplot(vif_df, aes(x = reorder(Variable, VIF), y = VIF)) +    # reorder() ordena el eje Y según el valor VIF
   geom_col(fill = "steelblue", width = 0.7) +                 # Barras azules
   geom_text(aes(label = round(VIF, 2)), hjust = -0.2, size = 4, color = "black") + # Añadir el valor numérico al lado de la barra
@@ -357,6 +343,8 @@ ggplot(vif_df, aes(x = reorder(Variable, VIF), y = VIF)) +    # reorder() ordena
   theme_minimal() +
   theme(plot.title = element_text(face = "bold", size = 14),
         axis.text.y = element_text(size = 11, face = "bold", color = "black")) # Nombres de variables más grandes y oscuros
+
+
 
 
 ############################################################
